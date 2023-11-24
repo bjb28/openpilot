@@ -12,6 +12,7 @@ from openpilot.selfdrive.car.honda.values import CAR, DBC, STEER_THRESHOLD, HOND
 from openpilot.selfdrive.car.interfaces import CarStateBase
 
 TransmissionType = car.CarParams.TransmissionType
+MAX_STEPS_STEER_MISMATCH = 4 + 2 # 3-4 steps is most common. Include a buffer.
 
 
 def get_can_messages(CP, gearbox_msg):
@@ -39,7 +40,7 @@ def get_can_messages(CP, gearbox_msg):
       ("SCM_BUTTONS", 25),
     ]
 
-  if CP.carFingerprint in (CAR.CRV_HYBRID, CAR.CIVIC_BOSCH_DIESEL, CAR.ACURA_RDX_3G, CAR.HONDA_E):
+  if CP.carFingerprint in (CAR.CRV_HYBRID, CAR.CIVIC_BOSCH_DIESEL, CAR.ACURA_RDX_3G, CAR.HONDA_E, CAR.ODYSSEY_BOSCH):
     messages.append((gearbox_msg, 50))
   else:
     messages.append((gearbox_msg, 100))
@@ -56,6 +57,7 @@ def get_can_messages(CP, gearbox_msg):
       messages += [
         ("ACC_HUD", 10),
         ("ACC_CONTROL", 50),
+        #TODO Check why Fork included an IMPERIAL_UNIT and additional items.
       ]
   else:  # Nidec signals
     if CP.carFingerprint == CAR.ODYSSEY_CHN:
@@ -65,7 +67,7 @@ def get_can_messages(CP, gearbox_msg):
 
   # TODO: clean this up
   if CP.carFingerprint in (CAR.ACCORD, CAR.ACCORDH, CAR.CIVIC_BOSCH, CAR.CIVIC_BOSCH_DIESEL, CAR.CRV_HYBRID, CAR.INSIGHT,
-                           CAR.ACURA_RDX_3G, CAR.HONDA_E, CAR.CIVIC_2022, CAR.HRV_3G):
+                           CAR.ACURA_RDX_3G, CAR.HONDA_E, CAR.CIVIC_2022, CAR.HRV_3G, CAR.ODYSSEY_BOSCH):
     pass
   elif CP.carFingerprint in (CAR.ODYSSEY_CHN, CAR.FREED, CAR.HRV):
     pass
@@ -80,6 +82,8 @@ def get_can_messages(CP, gearbox_msg):
     messages.append(("CRUISE_FAULT_STATUS", 50))
   elif CP.openpilotLongitudinalControl:
     messages.append(("STANDSTILL", 50))
+
+  #TODO The fork includes a minSteerSpeed that appended a tuple of 2 strings.
 
   return messages
 
@@ -98,6 +102,7 @@ class CarState(CarStateBase):
 
     self.shifter_values = can_define.dv[self.gearbox_msg]["GEAR_SHIFTER"]
     self.steer_status_values = defaultdict(lambda: "UNKNOWN", can_define.dv["STEER_STATUS"]["STEER_STATUS"])
+    self.steer_mismatch_cnt = 0
 
     self.brake_switch_prev = False
     self.brake_switch_active = False
@@ -130,7 +135,7 @@ class CarState(CarStateBase):
     ret.standstill = cp.vl["ENGINE_DATA"]["XMISSION_SPEED"] < 1e-5
     # TODO: find a common signal across all cars
     if self.CP.carFingerprint in (CAR.ACCORD, CAR.ACCORDH, CAR.CIVIC_BOSCH, CAR.CIVIC_BOSCH_DIESEL, CAR.CRV_HYBRID, CAR.INSIGHT,
-                                  CAR.ACURA_RDX_3G, CAR.HONDA_E, CAR.CIVIC_2022, CAR.HRV_3G):
+                                  CAR.ACURA_RDX_3G, CAR.HONDA_E, CAR.CIVIC_2022, CAR.HRV_3G, CAR.ODYSSEY_BOSCH):
       ret.doorOpen = bool(cp.vl["SCM_FEEDBACK"]["DRIVERS_DOOR_OPEN"])
     elif self.CP.carFingerprint in (CAR.ODYSSEY_CHN, CAR.FREED, CAR.HRV):
       ret.doorOpen = bool(cp.vl["SCM_BUTTONS"]["DRIVERS_DOOR_OPEN"])
@@ -139,6 +144,7 @@ class CarState(CarStateBase):
                           cp.vl["DOORS_STATUS"]["DOOR_OPEN_RL"], cp.vl["DOORS_STATUS"]["DOOR_OPEN_RR"]])
     ret.seatbeltUnlatched = bool(cp.vl["SEATBELT_STATUS"]["SEATBELT_DRIVER_LAMP"] or not cp.vl["SEATBELT_STATUS"]["SEATBELT_DRIVER_LATCHED"])
 
+    #TODO Fork has the next 5 lines removed.
     steer_status = self.steer_status_values[cp.vl["STEER_STATUS"]["STEER_STATUS"]]
     ret.steerFaultPermanent = steer_status not in ("NORMAL", "NO_TORQUE_ALERT_1", "NO_TORQUE_ALERT_2", "LOW_SPEED_LOCKOUT", "TMP_FAULT")
     # LOW_SPEED_LOCKOUT is not worth a warning
@@ -210,6 +216,8 @@ class CarState(CarStateBase):
         ret.cruiseState.nonAdaptive = acc_hud["CRUISE_CONTROL_LABEL"] != 0
         ret.cruiseState.standstill = acc_hud["CRUISE_SPEED"] == 252.
 
+        #TODO Fork has a conversion here that is modified but does not show up in this code.
+
         conversion = get_cruise_speed_conversion(self.CP.carFingerprint, self.is_metric)
         # On set, cruise set speed pulses between 254~255 and the set speed prev is set to avoid this.
         ret.cruiseState.speed = self.v_cruise_pcm_prev if acc_hud["CRUISE_SPEED"] > 160.0 else acc_hud["CRUISE_SPEED"] * conversion
@@ -235,6 +243,21 @@ class CarState(CarStateBase):
     ret.brake = cp.vl["VSA_STATUS"]["USER_BRAKE"]
     ret.cruiseState.enabled = cp.vl["POWERTRAIN_DATA"]["ACC_STATUS"] != 0
     ret.cruiseState.available = bool(cp.vl[self.main_on_sig_msg]["MAIN_ON"])
+
+    steer_status = self.steer_status_values[cp.vl["STEER_STATUS"]["STEER_STATUS"]]
+    # LOW_SPEED_LOCKOUT is not worth a warning on most cars
+    # NO_TORQUE_ALERT_2 can be caused by bump or steering nudge from driver
+    ret.steerFaultPermanent = steer_status not in ("NORMAL", "NO_TORQUE_ALERT_1", "NO_TORQUE_ALERT_2", "LOW_SPEED_LOCKOUT", "TMP_FAULT")
+    if self.CP.minSteerSpeed > 0.:
+      # TODO: make generic for all makes and clean up
+      # Check for steer mismatch when engaged and moving before setting a temporary fault. Allow for a small buffer as to not flash the alert when engaging.
+      self.steer_mismatch_cnt = self.steer_mismatch_cnt + 1 if ret.cruiseState.enabled and \
+                                not bool(cp.vl["STEER_STATUS"]["STEER_CONTROL_ACTIVE"]) and not ret.standstill else 0
+      steer_mismatch = True if self.steer_mismatch_cnt > MAX_STEPS_STEER_MISMATCH else False
+    else:
+      steer_mismatch = False
+    # TODO: detect the torque request diff from OP vs the radar
+    ret.steerFaultTemporary = steer_status not in ("NORMAL", "LOW_SPEED_LOCKOUT", "NO_TORQUE_ALERT_2") or steer_mismatch
 
     # Gets rid of Pedal Grinding noise when brake is pressed at slow speeds for some models
     if self.CP.carFingerprint in (CAR.PILOT, CAR.RIDGELINE):
