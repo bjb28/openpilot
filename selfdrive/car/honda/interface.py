@@ -4,7 +4,7 @@ from panda import Panda
 from openpilot.common.conversions import Conversions as CV
 from openpilot.common.numpy_fast import interp
 from openpilot.selfdrive.car.honda.values import CarControllerParams, CruiseButtons, HondaFlags, CAR, HONDA_BOSCH, HONDA_NIDEC_ALT_SCM_MESSAGES, \
-                                                                                            HONDA_BOSCH_ALT_BRAKE_SIGNAL, HONDA_BOSCH_RADARLESS
+                                                                                            HONDA_BOSCH_ALT_BRAKE_SIGNAL, HONDA_BOSCH_RADARLESS, STEER_LIMITING_RADAR
 from openpilot.selfdrive.car import create_button_events, get_safety_config
 from openpilot.selfdrive.car.interfaces import CarInterfaceBase
 from openpilot.selfdrive.car.disable_ecu import disable_ecu
@@ -87,6 +87,8 @@ class CarInterface(CarInterfaceBase):
     for fw in car_fw:
       if fw.ecu == "eps" and b"," in fw.fwVersion:
         eps_modified = True
+      if fw.ecu == "fwdRadar" and fw.fwVersion in STEER_LIMITING_RADAR and not ret.openpilotLongitudinalControl:
+          ret.minSteerSpeed = 36.5 * CV.MPH_TO_MS
 
     if candidate == CAR.CIVIC:
       ret.mass = 1326.
@@ -223,7 +225,7 @@ class CarInterface(CarInterfaceBase):
       ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.2], [0.06]]
       ret.tireStiffnessFactor = 0.677
 
-    elif candidate in (CAR.ODYSSEY, CAR.ODYSSEY_CHN):
+    elif candidate in (CAR.ODYSSEY, CAR.ODYSSEY_CHN, CAR.ODYSSEY_BOSCH):
       ret.mass = 1900.
       ret.wheelbase = 3.00
       ret.centerToFront = ret.wheelbase * 0.41
@@ -232,6 +234,8 @@ class CarInterface(CarInterfaceBase):
       ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.28], [0.08]]
       if candidate == CAR.ODYSSEY_CHN:
         ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 32767], [0, 32767]]  # TODO: determine if there is a dead zone at the top end
+      elif candidate == CAR.ODYSSEY_BOSCH and not ret.openpilotLongitudinalControl:
+        ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 3840], [0, 3840]]  # clipped by radar
       else:
         ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 4096], [0, 4096]]  # TODO: determine if there is a dead zone at the top end
 
