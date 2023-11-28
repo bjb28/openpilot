@@ -105,7 +105,7 @@ class Footnote(Enum):
     Column.FSR_STEERING)
   
   STEER_LIMITING_RADAR = CarFootnote(
-    "Stock LKAS limitations apply when used with Stock ACC, including minimum speed and active windshield wiper mode.",
+    "When disabling the radar, openpilot will steer to 3 mph. <b><i>NOTE: disabling the radar disables Automatic Emergency Braking (AEB).</i></b>",
     Column.FSR_STEERING)
 
 
@@ -148,7 +148,7 @@ CAR_INFO: Dict[str, Optional[Union[HondaCarInfo, List[HondaCarInfo]]]] = {
   CAR.HRV_3G: HondaCarInfo("Honda HR-V 2023", "All"),
   CAR.ODYSSEY: HondaCarInfo("Honda Odyssey 2018-20"),
   CAR.ODYSSEY_CHN: None,  # Chinese version of Odyssey
-  CAR.ODYSSEY_BOSCH: HondaCarInfo("Honda Odyssey 2021-22", "All", min_steer_speed=36.5 * CV.MPH_TO_MS, footnotes=[Footnote.STEER_LIMITING_RADAR]),
+  CAR.ODYSSEY_BOSCH: HondaCarInfo("Honda Odyssey 2021-22", "All", footnotes=[Footnote.STEER_LIMITING_RADAR]),
   CAR.ACURA_RDX: HondaCarInfo("Acura RDX 2016-18", "AcuraWatch Plus", min_steer_speed=12. * CV.MPH_TO_MS),
   CAR.ACURA_RDX_3G: HondaCarInfo("Acura RDX 2019-22", "All", min_steer_speed=3. * CV.MPH_TO_MS),
   CAR.PILOT: [
@@ -1100,7 +1100,8 @@ FW_VERSIONS = {
       b'28102-5MX-A100\x00\x00',  # 2021 Touring, 2022 Elite
       b'28102-5MX-C100\x00\x00',  # 2022 Touring
     ],
-    (Ecu.electricBrakeBooster, 0x18da2bf1, None): [b'46114-THR-A530\x00\x00'],
+    (Ecu.electricBrakeBooster, 0x18da2bf1, None): [
+      b'46114-THR-A530\x00\x00'],
     (Ecu.gateway, 0x18daeff1, None): [b'38897-THR-A130\x00\x00'],
     (Ecu.eps, 0x18da30f1, None): [b'39990-THR-A050\x00\x00'],
     (Ecu.fwdRadar, 0x18dab0f1, None): [b'36802-THR-A220\x00\x00'],
